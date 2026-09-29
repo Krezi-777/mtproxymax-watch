@@ -1,0 +1,142 @@
+name: Watch MTProxyMax updates
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mtproxymax-update-watch
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_REPO: SamNet-dev/MTProxyMax
+      SOURCE_BRANCH: main
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout watcher repository
+        uses: actions/checkout@v4
+
+      - name: Check MTProxyMax state
+        id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          api="https://api.github.com/repos/${SOURCE_REPO}/contents/mtproxymax.sh?ref=${SOURCE_BRANCH}"
+          raw="https://raw.githubusercontent.com/${SOURCE_REPO}/${SOURCE_BRANCH}/mtproxymax.sh"
+
+          current_sha="$(curl -fsSL -H 'Accept: application/vnd.github+json' "$api" | jq -r '.sha')"
+          curl -fsSL "$raw" -o /tmp/mtproxymax.sh
+
+          current_version="$(sed -n 's/^VERSION="\([^"]*\)".*/\1/p' /tmp/mtproxymax.sh | head -n1)"
+          current_telemt="$(sed -n 's/^TELEMT_MIN_VERSION="\([^"]*\)".*/\1/p' /tmp/mtproxymax.sh | head -n1)"
+          current_commit="$(sed -n 's/^TELEMT_COMMIT="\([^"]*\)".*/\1/p' /tmp/mtproxymax.sh | head -n1)"
+
+          test -n "$current_sha"
+          test -n "$current_version"
+          test -n "$current_telemt"
+          test -n "$current_commit"
+
+          old_sha="$(jq -r '.mtproxymax_blob_sha' state.json)"
+          old_version="$(jq -r '.mtproxymax_version' state.json)"
+          old_telemt="$(jq -r '.telemt_version' state.json)"
+          old_commit="$(jq -r '.telemt_commit' state.json)"
+
+          echo "Current: MTProxyMax ${current_version}; Telemt ${current_telemt}-${current_commit}; SHA ${current_sha}"
+          echo "Stored:  MTProxyMax ${old_version}; Telemt ${old_telemt}-${old_commit}; SHA ${old_sha}"
+
+          if [[ "$current_sha" == "$old_sha" ]]; then
+            echo 'No MTProxyMax-consumable update is available.'
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo 'changed=true' >> "$GITHUB_OUTPUT"
+          echo "current_sha=$current_sha" >> "$GITHUB_OUTPUT"
+          echo "current_version=$current_version" >> "$GITHUB_OUTPUT"
+          echo "current_telemt=$current_telemt" >> "$GITHUB_OUTPUT"
+          echo "current_commit=$current_commit" >> "$GITHUB_OUTPUT"
+          echo "old_version=$old_version" >> "$GITHUB_OUTPUT"
+          echo "old_telemt=$old_telemt" >> "$GITHUB_OUTPUT"
+          echo "old_commit=$old_commit" >> "$GITHUB_OUTPUT"
+
+      - name: Build notification
+        if: steps.check.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          new_ver='${{ steps.check.outputs.current_version }}'
+          new_tel='${{ steps.check.outputs.current_telemt }}'
+          new_commit='${{ steps.check.outputs.current_commit }}'
+          old_ver='${{ steps.check.outputs.old_version }}'
+          old_tel='${{ steps.check.outputs.old_telemt }}'
+          old_commit='${{ steps.check.outputs.old_commit }}'
+
+          {
+            echo '# MTProxyMax update is available'
+            echo
+            echo 'This notification means the **MTProxyMax updater itself** can see a newer upstream script/configuration.'
+            echo
+            echo "- MTProxyMax: \`${old_ver}\` -> \`${new_ver}\`"
+            echo "- Telemt pinned by MTProxyMax: \`${old_tel}-${old_commit}\` -> \`${new_tel}-${new_commit}\`"
+            echo
+            if [[ "$old_ver" == "$new_ver" ]]; then
+              echo '> The visible MTProxyMax version string did not change, but `mtproxymax.sh` did. The built-in updater would still detect this by file content.'
+              echo
+            fi
+            if [[ "$old_tel" == "$new_tel" && "$old_commit" == "$new_commit" ]]; then
+              echo '> Telemt pin did not change in this update.'
+              echo
+            fi
+            echo 'Action on the server:'
+            echo '```bash'
+            echo 'sudo mtproxymax'
+            echo '```'
+            echo 'Then choose **Check for updates**.'
+            echo
+            echo 'A standalone release in `telemt/telemt` does not trigger this watcher.'
+          } > release.md
+
+      - name: Publish one release notification per upstream script revision
+        if: steps.check.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          short_sha="${{ steps.check.outputs.current_sha }}"
+          tag="mtproxymax-${short_sha:0:12}"
+          title="MTProxyMax update available — v${{ steps.check.outputs.current_version }} / Telemt v${{ steps.check.outputs.current_telemt }}-${{ steps.check.outputs.current_commit }}"
+
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $tag already exists; not creating a duplicate."
+          else
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$title" --notes-file release.md
+          fi
+
+      - name: Advance watcher baseline
+        if: steps.check.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          jq -n \
+            --arg repo "$SOURCE_REPO" \
+            --arg sha '${{ steps.check.outputs.current_sha }}' \
+            --arg ver '${{ steps.check.outputs.current_version }}' \
+            --arg tel '${{ steps.check.outputs.current_telemt }}' \
+            --arg commit '${{ steps.check.outputs.current_commit }}' \
+            '{source_repo:$repo,mtproxymax_blob_sha:$sha,mtproxymax_version:$ver,telemt_version:$tel,telemt_commit:$commit}' \
+            > state.json
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add state.json
+          git commit -m "Advance MTProxyMax baseline to ${{ steps.check.outputs.current_version }} / ${{ steps.check.outputs.current_telemt }}-${{ steps.check.outputs.current_commit }}"
+          git push
