@@ -1,7 +1,7 @@
 {
   "source_repo": "SamNet-dev/MTProxyMax",
-  "mtproxymax_blob_sha": "6f1b91d1b43a4c7d68c4546c4ff08f26527dfb01",
-  "mtproxymax_version": "1.4.1-LTS",
-  "telemt_version": "3.5.7",
-  "telemt_commit": "4ca7418"
+  "mtproxymax_blob_sha": "8b2891267935eebaf579e7eef9d43efdcb76da16",
+  "mtproxymax_version": "1.4.2-LTS",
+  "telemt_version": "3.5.9",
+  "telemt_commit": "e3f62db"
 }
