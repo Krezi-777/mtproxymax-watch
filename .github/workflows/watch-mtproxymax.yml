@@ -58,12 +58,13 @@ jobs:
           echo "Stored:  MTProxyMax ${old_version}; Telemt ${old_telemt}-${old_commit}; SHA ${old_sha}"
 
           if [[ "$current_sha" == "$old_sha" ]]; then
-            echo 'No MTProxyMax-consumable update is available.'
-            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            echo 'No source change.'
+            echo 'source_changed=false' >> "$GITHUB_OUTPUT"
+            echo 'notify=false' >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          echo 'changed=true' >> "$GITHUB_OUTPUT"
+          echo 'source_changed=true' >> "$GITHUB_OUTPUT"
           echo "current_sha=$current_sha" >> "$GITHUB_OUTPUT"
           echo "current_version=$current_version" >> "$GITHUB_OUTPUT"
           echo "current_telemt=$current_telemt" >> "$GITHUB_OUTPUT"
@@ -72,8 +73,16 @@ jobs:
           echo "old_telemt=$old_telemt" >> "$GITHUB_OUTPUT"
           echo "old_commit=$old_commit" >> "$GITHUB_OUTPUT"
 
+          if [[ "$current_version" != "$old_version" || "$current_telemt" != "$old_telemt" || "$current_commit" != "$old_commit" ]]; then
+            echo 'Target update detected: VERSION and/or MTProxyMax-pinned Telemt changed.'
+            echo 'notify=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'Only mtproxymax.sh content changed; no target VERSION/Telemt update. Baseline will advance silently.'
+            echo 'notify=false' >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build notification
-        if: steps.check.outputs.changed == 'true'
+        if: steps.check.outputs.notify == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -88,17 +97,17 @@ jobs:
           {
             echo '# MTProxyMax update is available'
             echo
-            echo 'This notification means the **MTProxyMax updater itself** can see a newer upstream script/configuration.'
+            echo 'This notification means a **target update** is available: the MTProxyMax version and/or the Telemt version pinned by MTProxyMax changed.'
             echo
             echo "- MTProxyMax: \`${old_ver}\` -> \`${new_ver}\`"
             echo "- Telemt pinned by MTProxyMax: \`${old_tel}-${old_commit}\` -> \`${new_tel}-${new_commit}\`"
             echo
             if [[ "$old_ver" == "$new_ver" ]]; then
-              echo '> The visible MTProxyMax version string did not change, but `mtproxymax.sh` did. The built-in updater would still detect this by file content.'
+              echo '> MTProxyMax version is unchanged; the target update is the Telemt pin.'
               echo
             fi
             if [[ "$old_tel" == "$new_tel" && "$old_commit" == "$new_commit" ]]; then
-              echo '> Telemt pin did not change in this update.'
+              echo '> Telemt pin is unchanged; the target update is the MTProxyMax version.'
               echo
             fi
             echo 'Action on the server:'
@@ -107,11 +116,11 @@ jobs:
             echo '```'
             echo 'Then choose **Check for updates**.'
             echo
-            echo 'A standalone release in `telemt/telemt` does not trigger this watcher.'
+            echo 'Standalone `telemt/telemt` releases and script-only edits without VERSION/Telemt-pin changes do not trigger email notifications.'
           } > release.md
 
-      - name: Publish one release notification per upstream script revision
-        if: steps.check.outputs.changed == 'true'
+      - name: Publish target update notification
+        if: steps.check.outputs.notify == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -126,7 +135,7 @@ jobs:
           fi
 
       - name: Advance watcher baseline
-        if: steps.check.outputs.changed == 'true'
+        if: steps.check.outputs.source_changed == 'true'
         shell: bash
         run: |
           set -euo pipefail
